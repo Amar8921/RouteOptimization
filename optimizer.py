@@ -78,7 +78,14 @@ def optimize_routes(distance_matrix, demands, capacities, time_windows=None, tra
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
         routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION)
-    search_parameters.time_limit.seconds = 60 # Reduced for faster feedback
+    
+    # IMPROVEMENT: Use Guided Local Search to find the global optimum (better utilization)
+    search_parameters.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+    
+    # Time Limit: Give it 30 seconds to refine the solution.
+    # Increase this to 60s or 120s for even better results on large datasets.
+    search_parameters.time_limit.seconds = 30
 
     # Solve the problem.
     solution = routing.SolveWithParameters(search_parameters)
