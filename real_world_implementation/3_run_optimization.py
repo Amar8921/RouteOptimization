@@ -127,132 +127,180 @@ def run_optimization():
         # 4. Generate Integrated Report
         m = folium.Map(location=[s_lat, s_lon], zoom_start=11, tiles='cartodbpositron')
         folium.Marker([s_lat, s_lon], icon=folium.Icon(color='red', icon='school', prefix='fa'), tooltip=f"<b>{school_name}</b>").add_to(m)
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#e6194b', '#3cb44b', '#ffe119']
         
         dashboard_data = {"school_name": school_name, "routes": []}
+        global_stop_markers = {} # (lat, lon) -> list of stop details
+
         for i, route_info in enumerate(routes):
             v_info = extended_fleet[route_info['vehicle_id']]
+            v_info['bus_name_safe'] = v_info['name'].replace("'", "").replace('"', "")
             color = colors[i % len(colors)]
             node_coords = [coords[step['node']] for step in route_info['route']]
             road_path, road_dist, road_duration = get_real_road_geometry(node_coords)
             
-            # Metric: Average Speed in km/h
+            # --- OFFSET LOGIC: Prevent lines from overlapping on same roads ---
+            # Shift lat/lon by a few meters based on route index
+            offset = 0.00003 * (i - len(routes)/2) 
+            offset_path = [[p[0] + offset, p[1] + offset] for p in road_path]
+
             avg_speed_kmh = (road_dist / road_duration * 3.6) if road_duration > 0 else 0
-            
             route_pax_count = sum(df_model_split.iloc[step['node']]['demand'] for step in route_info['route'])
             
-            folium.PolyLine(
-                road_path, 
+            line = folium.PolyLine(
+                offset_path, 
                 color=color, 
-                weight=5, 
-                opacity=0.8,
+                weight=4, 
+                opacity=0.7,
                 tooltip=f"Bus {v_info['name']} ({route_pax_count} pax)"
-            ).add_to(m)
+            )
+            line.add_to(m)
+            # Tag the road line with the bus name for filtering
+            m.get_root().script.add_child(folium.Element(f"setTimeout(() => {{ if (typeof {line.get_name()} !== 'undefined') {line.get_name()}.options.bus_name = '{v_info['bus_name_safe']}'; }}, 100);"))
             
-            # --- New Logic: Group Stops by Coordinate to prevent overlapping numbers ---
-            coords_to_stops = {}
-            stops = []
+            route_stops_for_manifest = []
             stop_seq_num = 0
             for step_idx, step in enumerate(route_info['route']):
                 node_idx = step['node']
                 row = df_model_split.iloc[node_idx]
                 
-                # Add to manifest data
-                stops.append({
-                    "name": row['name'], 
-                    "students": int(row['student_count']), 
-                    "staff": int(row['staff_count']), 
-                    "pax": int(row['demand']), 
-                    "s_ids": str(row['student_ids']), 
-                    "st_ids": str(row['staff_ids']), 
+                # Add to manifest
+                route_stops_for_manifest.append({
+                    "name": row['name'], "students": int(row['student_count']), 
+                    "staff": int(row['staff_count']), "pax": int(row['demand']), 
+                    "s_ids": str(row['student_ids']), "st_ids": str(row['staff_ids']), 
                     "distance": step['cumulative_distance']
                 })
                 
                 if node_idx > 0:
                     stop_seq_num += 1
                     pos = (float(row['lat']), float(row['lon']))
-                    if pos not in coords_to_stops:
-                        coords_to_stops[pos] = {
-                            "numbers": [], 
-                            "name": row['name'].split(" (Part")[0], # Clean name
-                            "total_pax": 0,
-                            "student_count": 0,
-                            "staff_count": 0,
-                            "dist": step['cumulative_distance']
-                        }
-                    coords_to_stops[pos]["numbers"].append(str(stop_seq_num))
-                    coords_to_stops[pos]["total_pax"] += int(row['demand'])
-                    coords_to_stops[pos]["student_count"] += int(row['student_count'])
-                    coords_to_stops[pos]["staff_count"] += int(row['staff_count'])
-
-            # Now render the unique coordinate markers
-            for pos, info in coords_to_stops.items():
-                numbers_label = ", ".join(info["numbers"])
-                
-                stop_popup_html = f"""
-                <div style="font-family: Inter, sans-serif; width: 220px;">
-                    <div style="border-bottom: 2px solid {color}; padding-bottom: 5px; margin-bottom: 5px; display:flex; justify-content:space-between; align-items:center;">
-                        <strong style="color: {color}; font-size:14px;">STOP #{numbers_label}</strong>
-                        <span style="font-size: 11px; background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">Bus {v_info['name']}</span>
-                    </div>
-                    <b style="font-size:13px;">{info['name']}</b>
-                    <div style="margin-top: 8px; display: flex; gap: 5px;">
-                         <span style="background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: bold;">{info['student_count']} Students</span>
-                         <span style="background: #dcfce7; color: #15803d; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: bold;">{info['staff_count']} Staff</span>
-                    </div>
-                    <p style="margin-top: 8px; font-size: 11px; color: #666;">
-                        Total: <b>{info['total_pax']}</b> Pax<br>
-                        Route Distance: {info['dist']:.2f} km
-                    </p>
-                </div>
-                """
-                
-                folium.CircleMarker(
-                    pos, 
-                    radius=7, 
-                    color=color, 
-                    weight=2,
-                    fill=True, 
-                    fill_color='white',
-                    fill_opacity=1,
-                    tooltip=f"{numbers_label}. {info['name']} ({info['total_pax']} pax)",
-                    popup=folium.Popup(stop_popup_html, max_width=300)
-                ).add_to(m)
-
-                # Permanent Multi-Number Label
-                folium.Marker(
-                    pos,
-                    icon=folium.DivIcon(
-                        icon_size=(40, 20),
-                        icon_anchor=(20, 26),
-                        html=f"""
-                            <div style="
-                                font-family: 'Inter', sans-serif;
-                                font-size: 10px;
-                                font-weight: bold;
-                                color: white;
-                                background-color: {color};
-                                border: 1.5px solid white;
-                                border-radius: 10px;
-                                padding: 2px 6px;
-                                display: inline-block;
-                                white-space: nowrap;
-                                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-                                pointer-events: none;
-                            ">
-                                {numbers_label}
-                            </div>
-                        """
-                    )
-                ).add_to(m)
+                    if pos not in global_stop_markers:
+                        global_stop_markers[pos] = []
+                    
+                    global_stop_markers[pos].append({
+                        "bus": v_info['name'],
+                        "color": color,
+                        "seq": stop_seq_num,
+                        "pax": int(row['demand']),
+                        "name": row['name'].split(" (Part")[0]
+                    })
 
             dashboard_data["routes"].append({
-                "vehicle_name": v_info['name'], "max_cap": v_info['capacity'],
-                "total_pax": sum(s['pax'] for s in stops),
+                "vehicle_name": v_info['name'], "max_cap": int(v_info['capacity']),
+                "total_pax": int(route_pax_count),
+                "stop_count": int(stop_seq_num),
                 "total_dist": f"{road_dist/1000:.2f} km" if road_dist > 0 else f"{route_info['distance_meters']/1000:.2f} km",
                 "avg_speed": f"{avg_speed_kmh:.1f} km/h",
-                "stops": stops
+                "stops": route_stops_for_manifest
             })
+
+        # --- DRAW GLOBAL CLUSTERED MARKERS ---
+        for pos, bus_visits in global_stop_markers.items():
+            # If multiple buses, we'll use a neutral color for the circle but show all bus info
+            main_color = bus_visits[0]['color'] if len(bus_visits) == 1 else '#333333'
+            stop_name = bus_visits[0]['name']
+            
+            # Combine sequence labels (e.g. "B1: 1, B2: 4")
+            labels = []
+            for v in bus_visits:
+                labels.append(f"{v['seq']}")
+            numbers_label = ", ".join(labels)
+
+            popup_html = f"<div style='font-family:Inter; padding:5px;'><b>{stop_name}</b><hr>"
+            for v in bus_visits:
+                popup_html += f"<div style='margin-bottom:5px;'><span style='color:{v['color']}; font-weight:bold;'>Bus {v['bus']}</span>: Stop #{v['seq']} ({v['pax']} pax)</div>"
+            popup_html += "</div>"
+
+            cm = folium.CircleMarker(
+                pos, radius=7, color=main_color, weight=2, fill=True, fill_color='white', fill_opacity=1,
+                popup=folium.Popup(popup_html, max_width=300)
+            )
+            cm.add_to(m)
+            
+            # Tag marker with all buses that visit it
+            bus_names_js = json.dumps([v['bus'].replace("'", "").replace('"', "") for v in bus_visits])
+            m.get_root().script.add_child(folium.Element(f"setTimeout(() => {{ if (typeof {cm.get_name()} !== 'undefined') {cm.get_name()}.options.bus_names = {bus_names_js}; }}, 100);"))
+
+            # The Label Marker
+            lbl = folium.Marker(
+                pos,
+                icon=folium.DivIcon(
+                    icon_size=(40, 20), icon_anchor=(20, 26),
+                    html=f"""<div id="lbl-{id(pos)}" style="font-family:'Inter'; font-size:10px; font-weight:bold; color:white; background-color:{main_color}; border:1.5px solid white; border-radius:10px; padding:2px 6px; display:inline-block; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,0.4); pointer-events:none;">{numbers_label}</div>"""
+                )
+            )
+            lbl.add_to(m)
+            m.get_root().script.add_child(folium.Element(f"setTimeout(() => {{ if (typeof {lbl.get_name()} !== 'undefined') {lbl.get_name()}.options.bus_names = {bus_names_js}; }}, 100);"))
+
+
+        # --- FILTER UI & LOGIC INJECTION ---
+        all_bus_names = sorted(list(set(v['bus'].replace("'", "").replace('"', "") for visits in global_stop_markers.values() for v in visits)))
+        options_html = "".join([f'<option value="{name}">{name}</option>' for name in all_bus_names])
+        
+        filter_html = f"""
+        <div id="bus-filter-container" style="
+            position: fixed; top: 10px; right: 50px; z-index: 9999; 
+            background: rgba(255, 255, 255, 0.95); padding: 12px; border-radius: 10px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15); font-family: 'Inter', sans-serif;
+            border: 1px solid #e2e8f0; backdrop-filter: blur(4px);
+        ">
+            <div style="font-size: 10px; font-weight: 800; color: #475569; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.8px;">Bus Route Filter</div>
+            <select id="bus-select" onchange="window.filterBus(this.value)" style="
+                padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1;
+                font-size: 13px; color: #1e293b; background: white; cursor: pointer; outline: none; width: 160px;
+                font-family: 'Inter', sans-serif;
+            ">
+                <option value="all">Show All Routes</option>
+                {options_html}
+            </select>
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(filter_html))
+
+        filter_js = f"""
+        window.filterBus = function(busName) {{
+            var mapInstance = null;
+            // Robust check for the Leaflet map instance
+            for (var key in window) {{
+                if (key.startsWith('map_') && window[key] instanceof L.Map) {{
+                    mapInstance = window[key];
+                    break;
+                }}
+            }}
+            if (!mapInstance) {{
+                console.error("Map instance not found");
+                return;
+            }}
+
+            mapInstance.eachLayer(function(layer) {{
+                // Check if this layer has our custom bus tagging
+                var hasBusTag = layer.options && (layer.options.bus_name || layer.options.bus_names);
+                
+                if (hasBusTag) {{
+                    var isMatch = false;
+                    if (busName === 'all') {{
+                        isMatch = true;
+                    }} else if (layer.options.bus_name === busName) {{
+                        isMatch = true;
+                    }} else if (layer.options.bus_names && layer.options.bus_names.indexOf(busName) !== -1) {{
+                        isMatch = true;
+                    }}
+
+                    if (isMatch) {{
+                        if (layer.setStyle) layer.setStyle({{opacity: 0.8, fillOpacity: 0.6}});
+                        if (layer.setOpacity) layer.setOpacity(1.0);
+                        if (layer.getElement && layer.getElement()) layer.getElement().style.opacity = '1';
+                    }} else {{
+                        if (layer.setStyle) layer.setStyle({{opacity: 0.05, fillOpacity: 0.02}});
+                        if (layer.setOpacity) layer.setOpacity(0.1);
+                        if (layer.getElement && layer.getElement()) layer.getElement().style.opacity = '0.05';
+                    }}
+                }}
+            }});
+        }};
+        """
+        m.get_root().script.add_child(folium.Element(filter_js))
 
         safe_name = school_name.replace(" ", "_").replace(",", "").replace("-", "_").replace("__", "_")
         map_content = html.escape(m.get_root().render())
@@ -290,7 +338,7 @@ body{{font-family:'Inter',sans-serif;margin:0;display:flex;height:100vh;backgrou
     </div>
     <div id="fleet-pane" style="display:block;">
         <table class="summary-table">
-            <thead><tr><th>Bus Plate</th><th>Max Capacity</th><th>Occupied</th><th>Utilization%</th><th>Distance</th><th>Avg Speed</th></tr></thead>
+            <thead><tr><th>Bus Plate</th><th>Max Capacity</th><th>Total Stops</th><th>Occupied</th><th>Utilization%</th><th>Distance</th><th>Avg Speed</th></tr></thead>
             <tbody id="fleet-body"></tbody>
         </table>
     </div>
@@ -307,7 +355,7 @@ function switchTab(t, btn){{
 }}
 data.routes.forEach(r => {{
     const util = ((r.total_pax / r.max_cap)*100).toFixed(1);
-    document.getElementById('fleet-body').innerHTML += `<tr><td><b>${{r.vehicle_name}}</b></td><td>${{r.max_cap}} Seats</td><td><b style="color:${{r.total_pax > r.max_cap ? 'red' : '#27ae60'}}">${{r.total_pax}} Pax</b></td><td>${{util}}%</td><td>${{r.total_dist}}</td><td>${{r.avg_speed}}</td></tr>`;
+    document.getElementById('fleet-body').innerHTML += `<tr><td><b>${{r.vehicle_name}}</b></td><td>${{r.max_cap}} Seats</td><td>${{r.stop_count}} Stops</td><td><b style="color:${{r.total_pax > r.max_cap ? 'red' : '#27ae60'}}">${{r.total_pax}} Pax</b></td><td>${{util}}%</td><td>${{r.total_dist}}</td><td>${{r.avg_speed}}</td></tr>`;
     const card = document.createElement('div'); card.className = 'bus-card';
     card.innerHTML = `<h4>${{r.vehicle_name}}</h4><p>${{r.total_pax}} / ${{r.max_cap}} Pax • ${{r.total_dist}}</p>`;
     card.onclick = () => {{
