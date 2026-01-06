@@ -118,8 +118,9 @@ def run_optimization():
             mult += 1
             for f in fleet_list: extended_fleet.append({'name': f"{f['name']} (Trip {mult})", 'capacity': f['capacity']})
 
+        USE_REAL_ROADS_FOR_LARGE_SCHOOLS = False # Set to True for extra accuracy but much slower processing
         coords = list(zip(df_model_split['lat'], df_model_split['lon']))
-        dist_matrix = create_distance_matrix(coords)
+        dist_matrix = create_distance_matrix(coords, use_osrm_for_large=USE_REAL_ROADS_FOR_LARGE_SCHOOLS)
         print(f"   🤖 Solving VRP: {len(df_model_split)} nodes, {len(extended_fleet)} vehicles...")
         routes = optimize_routes(dist_matrix, list(df_model_split['demand']), [f['capacity'] for f in extended_fleet])
         if not routes: continue
@@ -317,9 +318,10 @@ body{{font-family:'Inter',sans-serif;margin:0;display:flex;height:100vh;backgrou
 .nav-tabs{{display:flex;gap:10px;margin-bottom:20px;}}
 .tab-btn{{padding:10px 20px;border:none;border-radius:8px;cursor:pointer;background:#e2e8f0;font-weight:600;}}
 .tab-btn.active{{background:#3498db;color:white;}}
-.summary-table{{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.05);}}
+.summary-table{{width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.05);}}
 .summary-table th, .summary-table td{{padding:15px;text-align:left;border-bottom:1px solid #f1f5f9;}}
-.summary-table th{{background:#1e293b;color:white;font-size:11px;}}
+.summary-table th{{background:#1e293b;color:white;font-size:11px;position:sticky;top:0;z-index:10;}}
+#fleet-pane{{overflow-y:auto; flex:1; border-radius:12px;}}
 .timeline{{position:relative;padding-left:40px;margin-top:20px;border-left:2px solid #e2e8f0;margin-left:15px;}}
 .stop-item{{position:relative;margin-bottom:15px;background:white;padding:15px;border-radius:10px;box-shadow:0 2px 4px rgba(0,0,0,0.03);}}
 .stop-item::before{{content:attr(data-step);position:absolute;left:-51px;top:20px;width:20px;height:20px;border-radius:50%;background:#3498db;color:white;font-size:10px;font-weight:bold;text-align:center;line-height:20px;border:3px solid white;box-shadow:0 0 0 2px #3498db;}}
