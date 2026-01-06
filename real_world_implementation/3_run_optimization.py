@@ -140,6 +140,12 @@ def run_optimization():
             node_coords = [coords[step['node']] for step in route_info['route']]
             road_path, road_dist, road_duration = get_real_road_geometry(node_coords)
             
+            # FIX: Force the visual line to start/end EXACTLY at the School Pin
+            # This closes any 'snapping gaps' from OSRM and ensures the link is visible
+            if road_path: 
+                road_path.insert(0, list(node_coords[0]))
+                road_path.append(list(node_coords[-1]))
+            
             # --- OFFSET LOGIC: Prevent lines from overlapping on same roads ---
             # Shift lat/lon by a few meters based on route index
             offset = 0.00003 * (i - len(routes)/2) 
@@ -382,7 +388,46 @@ data.routes.forEach(r => {{
 </script></body></html>
         """
         with open(os.path.join(outputs_dir, f'report_{safe_name}.html'), 'w', encoding='utf-8') as f: f.write(dashboard_html)
-    print("\n🎉 Map enriched: Numbered stops everywhere (Tooltips, Popups, Timeline).")
+        # --- GENERATE CSV MANIFEST FOR DRIVERS ---
+        manifest_rows = []
+        for r in dashboard_data["routes"]:
+            # Morning Route (Pickup)
+            for idx, s in enumerate(r["stops"]):
+                manifest_rows.append({
+                    "School": school_name,
+                    "Bus Plate": r["vehicle_name"],
+                    "Trip Type": "AM (Pickup)",
+                    "Sequence": idx + 1,
+                    "Stop Name": s["name"],
+                    "Activity": "DROP OFF" if s["name"] == "SCHOOL" else "PICK UP",
+                    "Students": s["students"],
+                    "Staff": s["staff"],
+                    "Total Pax": s["pax"],
+                    "Dist (km)": f"{s['distance']:.2f}"
+                })
+            
+            # Afternoon Route (Drop-off) - Reversed
+            reversed_stops = r["stops"][::-1] # Simple reversal
+            for idx, s in enumerate(reversed_stops):
+                 manifest_rows.append({
+                    "School": school_name,
+                    "Bus Plate": r["vehicle_name"],
+                    "Trip Type": "PM (Drop-off)",
+                    "Sequence": idx + 1,
+                    "Stop Name": s["name"],
+                    "Activity": "PICK UP" if s["name"] == "SCHOOL" else "DROP OFF",
+                    "Students": s["students"],
+                    "Staff": s["staff"],
+                    "Total Pax": s["pax"],
+                    "Dist (km)": "N/A" # Distances would need recalc, N/A for now
+                })
+
+        df_manifest = pd.DataFrame(manifest_rows)
+        csv_path = os.path.join(outputs_dir, f'manifest_{safe_name}.csv')
+        df_manifest.to_csv(csv_path, index=False)
+        print(f"📄 Manifest stored: {csv_path}")
+
+    print("\n🎉 Map enriched: Numbered stops everywhere (Tooltips, Popups, Timeline). Filter active.")
 
 if __name__ == "__main__":
     run_optimization()
