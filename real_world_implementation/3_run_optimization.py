@@ -23,7 +23,7 @@ def get_real_road_geometry(coords):
     for i in range(0, len(coords) - 1, chunk_size - 1):
         chunk = coords[i:i + chunk_size]
         loc_string = ";".join([f"{lon},{lat}" for lat, lon in chunk])
-        url = f"http://router.project-osrm.org/route/v1/driving/{loc_string}?overview=full&geometries=geojson"
+        url = f"http://127.0.0.1:5000/route/v1/driving/{loc_string}?overview=full&geometries=geojson"
         try:
             r = requests.get(url, timeout=15)
             data = r.json()

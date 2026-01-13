@@ -36,8 +36,8 @@ def create_distance_matrix(locations, use_osrm_for_large=False):
         # Simple case: Single request
         try:
             loc_string = ";".join([f"{lon},{lat}" for lat, lon in locations])
-            url = f"http://router.project-osrm.org/table/v1/driving/{loc_string}?annotations=distance"
-            response = requests.get(url, timeout=15)
+            url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?annotations=distance"
+            response = requests.get(url, timeout=5)
             data = response.json()
             if data.get('code') == 'Ok':
                 road_distances = data['distances']
@@ -60,7 +60,8 @@ def create_distance_matrix(locations, use_osrm_for_large=False):
         # We split into blocks. e.g. if size=500, we do 5x5 = 25 requests of 100x100
         # Wait, OSRM limit is 'sources + destinations' OR 'total elements'. 
         # For public OSRM, the limit is usually 100 coordinates total in the URL.
-        CHUNK = 50 
+        # Local OSRM can handle much larger chunks
+        CHUNK = 500
         num_chunks = (size + CHUNK - 1) // CHUNK
         
         total_reqs = num_chunks * num_chunks
@@ -79,7 +80,7 @@ def create_distance_matrix(locations, use_osrm_for_large=False):
                     dest_idx = ";".join([str(i) for i in range(len(locations[row_start:row_end]), len(subset_nodes))])
                     
                     loc_string = ";".join([f"{lon},{lat}" for lat, lon in subset_nodes])
-                    url = f"http://router.project-osrm.org/table/v1/driving/{loc_string}?sources={sources_idx}&destinations={dest_idx}&annotations=distance"
+                    url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?sources={sources_idx}&destinations={dest_idx}&annotations=distance"
                     
                     response = requests.get(url, timeout=20)
                     data = response.json()
