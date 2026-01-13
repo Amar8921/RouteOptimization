@@ -118,11 +118,14 @@ def run_optimization():
             mult += 1
             for f in fleet_list: extended_fleet.append({'name': f"{f['name']} (Trip {mult})", 'capacity': f['capacity']})
 
-        USE_REAL_ROADS_FOR_LARGE_SCHOOLS = False # Set to True for extra accuracy but much slower processing
+        USE_REAL_ROADS_ALWAYS = True # Since we have a local OSRM server, we use it for everything
         coords = list(zip(df_model_split['lat'], df_model_split['lon']))
-        dist_matrix = create_distance_matrix(coords, use_osrm_for_large=USE_REAL_ROADS_FOR_LARGE_SCHOOLS)
-        print(f"   🤖 Solving VRP: {len(df_model_split)} nodes, {len(extended_fleet)} vehicles...")
-        routes = optimize_routes(dist_matrix, list(df_model_split['demand']), [f['capacity'] for f in extended_fleet])
+        dist_matrix, dur_matrix = create_distance_matrix(coords, use_osrm_for_large=USE_REAL_ROADS_ALWAYS)
+        
+        print(f"   🤖 Solving VRP: {len(df_model_split)} nodes, {len(extended_fleet)} vehicles (Optimizing for Time)...")
+        # Optimization is now based on dur_matrix (time) instead of distance
+        routes = optimize_routes(dur_matrix, list(df_model_split['demand']), [f['capacity'] for f in extended_fleet])
+
         if not routes: continue
 
         # 4. Generate Integrated Report
@@ -167,17 +170,27 @@ def run_optimization():
             
             route_stops_for_manifest = []
             stop_seq_num = 0
+            curr_dist, curr_time = 0, 0
+            prev_node = None
+            
             for step_idx, step in enumerate(route_info['route']):
                 node_idx = step['node']
                 row = df_model_split.iloc[node_idx]
+                
+                if prev_node is not None:
+                    curr_dist += dist_matrix[prev_node][node_idx]
+                    curr_time += dur_matrix[prev_node][node_idx]
+                prev_node = node_idx
                 
                 # Add to manifest
                 route_stops_for_manifest.append({
                     "name": row['name'], "students": int(row['student_count']), 
                     "staff": int(row['staff_count']), "pax": int(row['demand']), 
                     "s_ids": str(row['student_ids']), "st_ids": str(row['staff_ids']), 
-                    "distance": step['cumulative_distance']
+                    "distance": curr_dist,
+                    "duration": curr_time
                 })
+
                 
                 if node_idx > 0:
                     stop_seq_num += 1
@@ -375,7 +388,7 @@ data.routes.forEach(r => {{
         r.stops.forEach((s, idx) => {{
             if (s.name !== "SCHOOL" || s.distance > 0) {{
                 stepCount++;
-                tl.innerHTML += `<div class="stop-item" data-step="${{stepCount}}"><h4>${{s.name}}</h4><p style="font-size:11px;color:#94a3b8;">${{s.distance.toFixed(2)}} km</p>
+                tl.innerHTML += `<div class="stop-item" data-step="${{stepCount}}"><h4>${{s.name}}</h4><p style="font-size:11px;color:#94a3b8;">${{s.distance.toFixed(2)}} km • ${{s.duration.toFixed(1)}} mins</p>
                 ${{s.students > 0 ? `<span class="pax-pill student">${{s.students}} Students</span>` : ''}}
                 ${{s.staff > 0 ? `<span class="pax-pill staff">${{s.staff}} Staff</span>` : ''}}
                 <div style="font-size:10px;color:#64748b;margin-top:5px;">IDs: ${{s.s_ids}} ${{s.st_ids}}</div></div>`;
@@ -403,7 +416,8 @@ data.routes.forEach(r => {{
                     "Students": s["students"],
                     "Staff": s["staff"],
                     "Total Pax": s["pax"],
-                    "Dist (km)": f"{s['distance']:.2f}"
+                    "Dist (km)": f"{s['distance']:.2f}",
+                    "Time (min)": f"{s['duration']:.1f}"
                 })
             
             # Afternoon Route (Drop-off) - Reversed
@@ -419,7 +433,8 @@ data.routes.forEach(r => {{
                     "Students": s["students"],
                     "Staff": s["staff"],
                     "Total Pax": s["pax"],
-                    "Dist (km)": "N/A" # Distances would need recalc, N/A for now
+                    "Dist (km)": "N/A",
+                    "Time (min)": "N/A"
                 })
 
         df_manifest = pd.DataFrame(manifest_rows)

@@ -1,25 +1,22 @@
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-def optimize_routes(distance_matrix, demands, capacities, time_windows=None, travel_times=None, depot_idx=0):
+def optimize_routes(cost_matrix, demands, capacities, time_windows=None, travel_times=None, depot_idx=0):
     """
     Solves the Vehicle Routing Problem.
-    - CVRP if time_windows is None
-    - CVRPTW if time_windows is provided
+    - cost_matrix: The matrix used for objective minimization (can be distance or time).
+    - transit_callback: Maps cost_matrix to integer weights.
     """
-    # Create the routing index manager.
-    manager = pywrapcp.RoutingIndexManager(
-        len(distance_matrix), len(capacities), depot_idx)
-
-    # Create Routing Model.
+    manager = pywrapcp.RoutingIndexManager(len(cost_matrix), len(capacities), depot_idx)
     routing = pywrapcp.RoutingModel(manager)
 
-    # 1. Distance Callback (for costs)
-    def distance_callback(from_index, to_index):
+    # 1. Cost Callback (Minimize total cost)
+    def cost_callback(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return int(distance_matrix[from_node][to_node] * 1000)
+        # OSRM values are used here. We multiply to preserve precision in integer solver.
+        return int(cost_matrix[from_node][to_node] * 1000)
 
-    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    transit_callback_index = routing.RegisterTransitCallback(cost_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
     # 2. Demand Callback (for capacity)
@@ -35,6 +32,7 @@ def optimize_routes(distance_matrix, demands, capacities, time_windows=None, tra
         True,  # start cumul to zero
         "Capacity",
     )
+
 
     # 3. Time Callback (Optional: Only if TW provided)
     time_dimension = None

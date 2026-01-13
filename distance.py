@@ -13,57 +13,56 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def create_distance_matrix(locations, use_osrm_for_large=False):
     """
-    Creates a road-accurate distance matrix using OSRM Table API with chunking for large datasets.
+    Creates road-accurate distance and duration matrices using OSRM Table API.
     locations: List of (lat, lon) tuples.
-    use_osrm_for_large: If True, chunking will be used for schools > 100 nodes.
-    Returns: Matrix of distances in kilometers.
+    use_osrm_for_large: If True, chunking will be used for schools > MAX_NODES.
+    Returns: (distance_matrix, duration_matrix) in kilometers and minutes.
     """
     size = len(locations)
-    if size == 0: return []
+    if size == 0: return [], []
     
-    # Initialize matrix with Haversine as a baseline fallback
-    matrix = [[0.0] * size for _ in range(size)]
+    # Initialize matrices with Haversine as a baseline fallback
+    dist_matrix = [[0.0] * size for _ in range(size)]
+    dur_matrix = [[0.0] * size for _ in range(size)]
+    
     for i in range(size):
         for j in range(size):
             if i != j:
-                matrix[i][j] = haversine(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
+                d = haversine(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
+                dist_matrix[i][j] = d
+                dur_matrix[i][j] = (d / 30.0) * 60.0 # Estimate: 30km/h average
 
-    # OSRM Table API limit (public server is ~100 nodes per request total)
-    # To handle large matrices, we request blocks. Max nodes in one request (sources + destinations)
+    # OSRM Table API limit
     MAX_NODES = 100 
 
     if size <= MAX_NODES:
-        # Simple case: Single request
         try:
             loc_string = ";".join([f"{lon},{lat}" for lat, lon in locations])
-            url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?annotations=distance"
+            url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?annotations=distance,duration"
             response = requests.get(url, timeout=5)
             data = response.json()
             if data.get('code') == 'Ok':
                 road_distances = data['distances']
+                road_durations = data['durations']
                 for i in range(size):
                     for j in range(size):
                         if road_distances[i][j] is not None:
-                            matrix[i][j] = road_distances[i][j] / 1000.0
-                print(f"✅ Success: Fetched {size}x{size} distance matrix.")
-                return matrix
+                            dist_matrix[i][j] = road_distances[i][j] / 1000.0
+                        if road_durations[i][j] is not None:
+                            dur_matrix[i][j] = road_durations[i][j] / 60.0 # Convert seconds to minutes
+                print(f"✅ Success: Fetched {size}x{size} distance/duration matrices.")
+                return dist_matrix, dur_matrix
         except Exception as e:
-            print(f"⚠️ OSRM failed ({e}). Using Haversine.")
-            return matrix
+            print(f"⚠️ OSRM failed ({e}). Using Haversine/Estimates.")
+            return dist_matrix, dur_matrix
     else:
-        # Complex case: Chunking for Large Schools (e.g. 500+ nodes)
         if not use_osrm_for_large:
-            print(f"ℹ️ Node count ({size}) is large. Using Haversine for performance (use_osrm_for_large=False).")
-            return matrix
+            print(f"ℹ️ Node count ({size}) is large. Using Haversine (use_osrm_for_large=False).")
+            return dist_matrix, dur_matrix
 
-        print(f"🚀 Processing LARGE dataset ({size} nodes). Fetching road distances in chunks...")
-        # We split into blocks. e.g. if size=500, we do 5x5 = 25 requests of 100x100
-        # Wait, OSRM limit is 'sources + destinations' OR 'total elements'. 
-        # For public OSRM, the limit is usually 100 coordinates total in the URL.
-        # Local OSRM can handle much larger chunks
-        CHUNK = 500
+        print(f"🚀 Processing LARGE dataset ({size} nodes). Fetching road data in chunks...")
+        CHUNK = 50 # Reduced chunk size for combined annotations to avoid URL length limits
         num_chunks = (size + CHUNK - 1) // CHUNK
-        
         total_reqs = num_chunks * num_chunks
         completed = 0
         
@@ -73,33 +72,33 @@ def create_distance_matrix(locations, use_osrm_for_large=False):
                     row_start, row_end = row_chunk * CHUNK, min((row_chunk + 1) * CHUNK, size)
                     col_start, col_end = col_chunk * CHUNK, min((col_chunk + 1) * CHUNK, size)
                     
-                    # Nodes for this specific chunk
                     subset_nodes = locations[row_start:row_end] + locations[col_start:col_end]
-                    # Sources are the first part, Destinations are the second part
                     sources_idx = ";".join([str(i) for i in range(len(locations[row_start:row_end]))])
                     dest_idx = ";".join([str(i) for i in range(len(locations[row_start:row_end]), len(subset_nodes))])
                     
                     loc_string = ";".join([f"{lon},{lat}" for lat, lon in subset_nodes])
-                    url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?sources={sources_idx}&destinations={dest_idx}&annotations=distance"
+                    url = f"http://127.0.0.1:5000/table/v1/driving/{loc_string}?sources={sources_idx}&destinations={dest_idx}&annotations=distance,duration"
                     
                     response = requests.get(url, timeout=20)
                     data = response.json()
                     
                     if data.get('code') == 'Ok':
                         dist_chunk = data['distances']
-                        for i, road_row in enumerate(dist_chunk):
-                            for j, val in enumerate(road_row):
-                                if val is not None:
-                                    matrix[row_start + i][col_start + j] = val / 1000.0
+                        dur_chunk = data['durations']
+                        for i in range(len(dist_chunk)):
+                            for j in range(len(dist_chunk[0])):
+                                if dist_chunk[i][j] is not None:
+                                    dist_matrix[row_start + i][col_start + j] = dist_chunk[i][j] / 1000.0
+                                if dur_chunk[i][j] is not None:
+                                    dur_matrix[row_start + i][col_start + j] = dur_chunk[i][j] / 60.0
                     
                     completed += 1
                     sys.stdout.write(f"\r   Progress: {completed}/{total_reqs} chunks fetched... ")
                     sys.stdout.flush()
-                    # Small sleep to be polite to public OSRM server
-                    time.sleep(0.5)
             
-            print(f"\n✅ Large Matrix Complete: Fully road-accurate distances for {size} nodes.")
+            print(f"\n✅ Large matrices complete for {size} nodes.")
         except Exception as e:
-            print(f"\n⚠️ Chunked OSRM failed at {completed}/{total_reqs} ({e}). Remaining will use Haversine.")
+            print(f"\n⚠️ OSRM failed at {completed}/{total_reqs} ({e}). Fallback used.")
             
-    return matrix
+    return dist_matrix, dur_matrix
+
